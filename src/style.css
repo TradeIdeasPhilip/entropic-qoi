@@ -1,0 +1,38 @@
+@import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,200..900;1,200..900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Ranchers&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Life+Savers:wght@400;700;800&display=swap");
+
+body {
+  font-family: "Life Savers", serif;
+  font-weight: bold;
+  font-size: 1.4em;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Ranchers", fantasy;
+  font-weight: 400;
+}
+
+/**
+ * This is a common style for code.
+ *
+ */
+code {
+  background-color: lightblue;
+  border-radius: 0.3em;
+  padding-left: 0.25em;
+  padding-right: 0.25em;
+  color: blue;
+  font-family: "Source Code Pro", monospace;
+  font-weight: 400;
+  font-size: 85%;
+}
+
+a:visited {
+  color: #c000c0;
+}
