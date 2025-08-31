@@ -93,6 +93,14 @@ If we get three of the same value in a row, it's very possible that those were a
 If we get 300 or 3000 of the same thing in a row, that different.
 RLE can be very efficient with very large values.
 
+**Update**: RLE looks very promising.
+We are already looking at the difference between this byte and the previous, and sending that byte the the entropy encoder.
+Proposed new rule: After sending a 0, and only after sending a 0, we are primed to say how many 0’s in a row.
+Start with the most optimistic case: See what the cost would be if we threw away all of the zeros and still encoded all of the other difference values.
+This simulates the case where all of these 0’s were in one long run and we could send a single RLE command to replace them all.
+This is the upper bound, the most we could save with RLE.
+We’ll need more precise tests to get better results, but first let's see if it's even worth it.
+
 And the idea of caching recent values.
 I've had a lot of experience with recently used values.
 They are usually expensive.
@@ -138,23 +146,25 @@ Then a second pass to encode everything.
 
 ## TODO first version
 
-Create a canvas.
-Load it with a picture.
-Start with the QOI reference images.
-Include an interface to load a local file or an arbitrary url.
+- ✅ Create a canvas.
+- ✅ Load it with a picture.
+- Start with the QOI reference images.
+- Include an interface to load a local file or an arbitrary url.
 
-Create a way to accumulate a map, how many times each number has been used.
-Focus on the 0-255 actual values and -255 to +255 relative values.
-We can deal with % 256 values later if we want.
-Need to **display** a histogram where each of the values is very clear, even if the counts are rounded to display well.
-It should not be hard to fit 511 columns across on my screen.
-Need to know how many zeros in each table.
-I need to know the cost of encoding with just that one table.
+- ✅ Create a way to accumulate a map, how many times each number has been used.
+- ✅ Focus on the 0-255 actual values and -255 to +255 relative values.
+  - We can deal with % 256 values later if we want.
+- ✅ Need to **display** a histogram where each of the values is very clear, even if the counts are rounded to display well.
+  - It should not be hard to fit 511 columns across on my screen.
+- ✅ Need to know how many zeros in each table.
+- ✅ I need to know the cost of encoding with just that one table.
 
 Then two more experiments.
-(The cost of the one table + the other) / 2
-Multiplying the probabilities of each table.
-Maybe consider something dealing with the 0's only if we see a lot of 0's first.
+
+- (The cost of the one table + the other) / 2
+- Multiplying the probabilities of each table.
+- Maybe consider something dealing with the 0's only if we see a lot of 0's first.
+  - 👆 **Update**: The histograms are in place, values identical to the previous value are _very_ common.
 
 ## RLE
 
@@ -162,7 +172,3 @@ Presumably the RLE only makes sense for absolute values, not relative values.
 I said I only cared when the repeat count is very big.
 The biggest it could be for the relative counter would be 255.
 It's worth taking some statistics to see what these long values look like.
-
-## Processing
-
-Can I access 16 bit floating point color values from the canvas?

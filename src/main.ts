@@ -87,6 +87,7 @@ function stats(imageData: ImageData, initialFileSize: number) {
   });
   let positionCompressedSize = 0;
   let differenceCompressedSize = 0;
+  let rleCompressedSize = 0;
   for (let [name, accumulator] of zip(channelNames, accumulators)) {
     const byteCost = EntropyEncoder.costFromMap(accumulator.byteCounts);
     positionCompressedSize += byteCost;
@@ -94,14 +95,10 @@ function stats(imageData: ImageData, initialFileSize: number) {
       accumulator.differenceCounts
     );
     differenceCompressedSize += differenceCost;
-    console.log(
-      name,
-      accumulator,
-      countZeros(accumulator.byteCounts),
-      byteCost.toLocaleString(),
-      countZeros(accumulator.differenceCounts),
-      differenceCost.toLocaleString()
-    );
+    const optimisticRleCounts = new Map(accumulator.differenceCounts);
+    optimisticRleCounts.set(0, 0);
+    const optimisticRleCost = EntropyEncoder.costFromMap(optimisticRleCounts);
+    rleCompressedSize += optimisticRleCost;
     {
       const top = selectorQuery(`[data-color="${name}"]`, HTMLDivElement);
       {
@@ -136,27 +133,25 @@ function stats(imageData: ImageData, initialFileSize: number) {
       ).innerHTML = `Number of 0’s: ${countZeros(
         accumulator.differenceCounts
       )}. Cost in bytes: ${differenceCost.toLocaleString()}.`;
+      {
+        const container = selectorQuery(
+          '[data-content="optimistic-rle"]',
+          SVGSVGElement,
+          top
+        );
+        const element = makeHistogram(optimisticRleCounts)!;
+        container.append(element);
+      }
+      selectorQuery(
+        '[data-which="optimistic-rle"',
+        HTMLDivElement,
+        top
+      ).innerHTML = `Number of 0’s: ${countZeros(
+        optimisticRleCounts
+      )}. Cost in bytes: ${optimisticRleCost.toLocaleString()}.`;
     }
   }
   const uncompressedFileSize = imageData.data.length;
-  console.log("uncompressed file size:", uncompressedFileSize);
-  console.log(
-    "initial file size:",
-    initialFileSize,
-    initialFileSize / uncompressedFileSize
-  );
-  console.log(
-    "byte compressed size:",
-    positionCompressedSize,
-    positionCompressedSize / uncompressedFileSize,
-    positionCompressedSize / initialFileSize
-  );
-  console.log(
-    "difference compressed size:",
-    differenceCompressedSize,
-    differenceCompressedSize / uncompressedFileSize,
-    differenceCompressedSize / initialFileSize
-  );
   selectorQuery("#summary", HTMLDivElement).append(
     `Uncompressed file size: ${uncompressedFileSize.toLocaleString()}.`,
     document.createElement("br"),
@@ -178,6 +173,14 @@ function stats(imageData: ImageData, initialFileSize: number) {
       100
     ).toFixed(3)}% of uncompressed, ${(
       (differenceCompressedSize / initialFileSize) *
+      100
+    ).toFixed(3)}% of PNG.`,
+    document.createElement("br"),
+    `Optimistic RLE compressed size: ${rleCompressedSize.toLocaleString()}, ${(
+      (rleCompressedSize / uncompressedFileSize) *
+      100
+    ).toFixed(3)}% of uncompressed, ${(
+      (rleCompressedSize / initialFileSize) *
       100
     ).toFixed(3)}% of PNG.`
   );

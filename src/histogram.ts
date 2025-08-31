@@ -2,7 +2,7 @@ import * as d3 from "d3";
 
 export function makeHistogram(
   frequencies: ReadonlyMap<number, number>,
-  yMax: number | undefined = 20000
+  yMax: number | undefined = undefined
 ) {
   // Declare the chart dimensions and margins.
   const width = 928;
@@ -108,7 +108,7 @@ export function makeHistogram(
         .attr("y", marginBottom - 5)
         .attr("fill", "currentColor")
         .attr("text-anchor", "end")
-        .text("Value")
+        .text("Value to Encode")
     );
 
   // Add the y-axis and label with commas.
