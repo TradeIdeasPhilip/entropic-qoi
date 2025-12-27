@@ -36,10 +36,14 @@ async function loadFromUrl(url: string) {
 
 function increment<T>(map: Map<T, number>, key: T) {
   const previousValue = map.get(key);
-  if (previousValue === undefined) {
-    throw new Error("unknown item");
-  }
-  map.set(key, previousValue + 1);
+  const newValue = (previousValue ?? 0) + 1;
+  map.set(key, newValue);
+}
+
+function decrement<T>(map: Map<T, number>, key: T) {
+  const previousValue = map.get(key);
+  const newValue = (previousValue ?? 0) - 1;
+  map.set(key, newValue);
 }
 
 function countZeros<T>(map: ReadonlyMap<T, number>) {
@@ -60,11 +64,29 @@ class Accumulator {
   #differenceCounts = new Map<number, number>(
     count(-255, 256).map((difference) => [difference, 0])
   );
+  #currentRunLength = 0;
+  #differencesAfterRle = new Map<number, number>(
+    count(-255, 256).map((difference) => [difference, 0])
+  );
+  #runLengths = new Map<number, number>();
   add(byte: number) {
     increment(this.#byteCounts, byte);
     if (this.#previousByte !== undefined) {
       const difference = byte - this.#previousByte;
       increment(this.#differenceCounts, difference);
+      // RLE part:
+      if (difference == 0) {
+        if (this.#currentRunLength > 0) {
+          decrement(this.#runLengths, this.#currentRunLength);
+        }
+        this.#currentRunLength++;
+        increment(this.#runLengths, this.#currentRunLength);
+      } else {
+        this.#currentRunLength = 0;
+      }
+      if (this.#currentRunLength < 2) {
+        increment(this.#differencesAfterRle, difference);
+      }
     }
     this.#previousByte = byte;
   }
@@ -73,6 +95,12 @@ class Accumulator {
   }
   get differenceCounts(): ReadonlyMap<number, number> {
     return this.#differenceCounts;
+  }
+  get differencesAfterRle(): ReadonlyMap<number, number> {
+    return this.#differencesAfterRle;
+  }
+  get runLengths(): ReadonlyMap<number, number> {
+    return this.#runLengths;
   }
 }
 
@@ -87,69 +115,95 @@ function stats(imageData: ImageData, initialFileSize: number) {
   });
   let positionCompressedSize = 0;
   let differenceCompressedSize = 0;
+  let optimisticRleCompressedSize = 0;
+  let lessOptimisticRleCompressedSize = 0;
   let rleCompressedSize = 0;
   for (let [name, accumulator] of zip(channelNames, accumulators)) {
+    const top = selectorQuery(`[data-color="${name}"]`, HTMLDivElement);
+    function drawHistogram(
+      selector: string,
+      data: ReadonlyMap<number, number>
+    ) {
+      const container = selectorQuery(selector, SVGSVGElement, top);
+      const element = makeHistogram(data)!; // TODO why do I have ! everywhere?  Fix the api?
+      container.append(element);
+    }
+    function say(selector: string, text: string) {
+      selectorQuery(selector, HTMLDivElement, top).innerHTML = text;
+    }
+
+    /**
+     * Look at the frequency of the data without any filter.
+     */
     const byteCost = EntropyEncoder.costFromMap(accumulator.byteCounts);
     positionCompressedSize += byteCost;
+    drawHistogram('[data-content="bytes"]', accumulator.byteCounts);
+    say(
+      '[data-which="bytes"',
+      `Number of 0’s: ${countZeros(
+        accumulator.byteCounts
+      )}. Cost in bytes: ${byteCost.toLocaleString()}`
+    );
+
+    /**
+     * Basic preprocessing:  Subtract the previous value from the current value, then encode these differences.
+     */
     const differenceCost = EntropyEncoder.costFromMap(
       accumulator.differenceCounts
     );
     differenceCompressedSize += differenceCost;
+    drawHistogram('[data-content="differences"]', accumulator.differenceCounts);
+    say(
+      '[data-which="differences"',
+      `Number of 0’s: ${countZeros(
+        accumulator.differenceCounts
+      )}. Cost in bytes: ${differenceCost.toLocaleString()}.`
+    );
+
+    /**
+     * This is an upper bound on how much we can save from the RLE.
+     *
+     * RLE only looks at bytes where the difference between that byte and the previous byte is 0.
+     * Assume all of these zero are all together and can be handled in one RLE instruction with fixed cost.
+     */
     const optimisticRleCounts = new Map(accumulator.differenceCounts);
     optimisticRleCounts.set(0, 0);
     const optimisticRleCost = EntropyEncoder.costFromMap(optimisticRleCounts);
-    rleCompressedSize += optimisticRleCost;
-    {
-      const top = selectorQuery(`[data-color="${name}"]`, HTMLDivElement);
-      {
-        const container = selectorQuery(
-          '[data-content="bytes"]',
-          SVGSVGElement,
-          top
-        );
-        const element = makeHistogram(accumulator.byteCounts)!;
-        container.append(element);
-      }
-      selectorQuery(
-        '[data-which="bytes"',
-        HTMLDivElement,
-        top
-      ).innerHTML = `Number of 0’s: ${countZeros(
-        accumulator.byteCounts
-      )}. Cost in bytes: ${byteCost.toLocaleString()}`;
-      {
-        const container = selectorQuery(
-          '[data-content="differences"]',
-          SVGSVGElement,
-          top
-        );
-        const element = makeHistogram(accumulator.differenceCounts)!;
-        container.append(element);
-      }
-      selectorQuery(
-        '[data-which="differences"',
-        HTMLDivElement,
-        top
-      ).innerHTML = `Number of 0’s: ${countZeros(
-        accumulator.differenceCounts
-      )}. Cost in bytes: ${differenceCost.toLocaleString()}.`;
-      {
-        const container = selectorQuery(
-          '[data-content="optimistic-rle"]',
-          SVGSVGElement,
-          top
-        );
-        const element = makeHistogram(optimisticRleCounts)!;
-        container.append(element);
-      }
-      selectorQuery(
-        '[data-which="optimistic-rle"',
-        HTMLDivElement,
-        top
-      ).innerHTML = `Number of 0’s: ${countZeros(
+    optimisticRleCompressedSize += optimisticRleCost;
+    drawHistogram('[data-content="optimistic-rle"]', optimisticRleCounts);
+    say(
+      '[data-which="optimistic-rle"',
+      `Number of 0’s: ${countZeros(
         optimisticRleCounts
-      )}. Cost in bytes: ${optimisticRleCost.toLocaleString()}.`;
+      )}. Cost in bytes: ${optimisticRleCost.toLocaleString()}.`
+    );
+
+    /**
+     * A modified version of the differences, because we've removed the ones that were part of an RLE stream.
+     */
+    const rleDifferencesCost = EntropyEncoder.costFromMap(
+      accumulator.differencesAfterRle
+    );
+    drawHistogram(
+      '[data-content="rle-differences"]',
+      accumulator.differencesAfterRle
+    );
+    /**
+     * And then the cost of those runs.
+     */
+    const rleRunsCost = EntropyEncoder.costFromMap(accumulator.runLengths);
+    if (accumulator.runLengths.size < 2000) {
+      drawHistogram('[data-content="rle-lengths"]', accumulator.runLengths);
     }
+    console.log(accumulator.runLengths);
+    lessOptimisticRleCompressedSize += rleDifferencesCost;
+    rleCompressedSize += rleDifferencesCost + rleRunsCost;
+    say(
+      '[data-which="rle"]',
+      `Differences cost: ${rleDifferencesCost.toLocaleString()}, Runs cost: ${rleRunsCost.toLocaleString()}, Total cost in bytes: ${
+        rleDifferencesCost + rleRunsCost
+      }.`
+    );
   }
   const uncompressedFileSize = imageData.data.length;
   selectorQuery("#summary", HTMLDivElement).append(
@@ -176,7 +230,23 @@ function stats(imageData: ImageData, initialFileSize: number) {
       100
     ).toFixed(3)}% of PNG.`,
     document.createElement("br"),
-    `Optimistic RLE compressed size: ${rleCompressedSize.toLocaleString()}, ${(
+    `Optimistic RLE compressed size: ${optimisticRleCompressedSize.toLocaleString()}, ${(
+      (optimisticRleCompressedSize / uncompressedFileSize) *
+      100
+    ).toFixed(3)}% of uncompressed, ${(
+      (optimisticRleCompressedSize / initialFileSize) *
+      100
+    ).toFixed(3)}% of PNG.`,
+    document.createElement("br"),
+    `Less optimistic RLE compressed size: ${lessOptimisticRleCompressedSize.toLocaleString()}, ${(
+      (lessOptimisticRleCompressedSize / uncompressedFileSize) *
+      100
+    ).toFixed(3)}% of uncompressed, ${(
+      (lessOptimisticRleCompressedSize / initialFileSize) *
+      100
+    ).toFixed(3)}% of PNG.`,
+    document.createElement("br"),
+    `RLE compressed size: ${rleCompressedSize.toLocaleString()}, ${(
       (rleCompressedSize / uncompressedFileSize) *
       100
     ).toFixed(3)}% of uncompressed, ${(
@@ -186,6 +256,6 @@ function stats(imageData: ImageData, initialFileSize: number) {
   );
 }
 
-loadFromUrl("./reference-images/Laser Light Show.png");
+loadFromUrl("./reference-images/Lenna.png");
 
 (window as any).philDebug = { loadFromUrl, EntropyEncoder };
