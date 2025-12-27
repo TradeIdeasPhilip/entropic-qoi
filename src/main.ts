@@ -9,6 +9,7 @@ import {
 } from "phil-lib/misc";
 import { EntropyEncoder } from "./entropy-encoder";
 import { makeHistogram } from "./histogram";
+import { MruList } from "./mru-list";
 
 const canvas = selectorQuery("canvas", HTMLCanvasElement);
 const context = assertNonNullable(canvas.getContext("2d"));
@@ -64,29 +65,24 @@ class Accumulator {
   #differenceCounts = new Map<number, number>(
     count(-255, 256).map((difference) => [difference, 0])
   );
-  #currentRunLength = 0;
-  #differencesAfterRle = new Map<number, number>(
-    count(-255, 256).map((difference) => [difference, 0])
+  #byteMruList = MruList.bytes();
+  #mruByteCounts = new Map<number, number>(
+    initializedArray(256, (byte) => [byte, 0])
   );
-  #runLengths = new Map<number, number>();
+  #differenceMruList = MruList.diffs();
+  #mruDifferenceCounts = new Map<number, number>(
+    initializedArray(511, (index) => [index, 0])
+  );
   add(byte: number) {
     increment(this.#byteCounts, byte);
+    increment(this.#mruByteCounts, this.#byteMruList.encode(byte));
     if (this.#previousByte !== undefined) {
       const difference = byte - this.#previousByte;
       increment(this.#differenceCounts, difference);
-      // RLE part:
-      if (difference == 0) {
-        if (this.#currentRunLength > 0) {
-          decrement(this.#runLengths, this.#currentRunLength);
-        }
-        this.#currentRunLength++;
-        increment(this.#runLengths, this.#currentRunLength);
-      } else {
-        this.#currentRunLength = 0;
-      }
-      if (this.#currentRunLength < 2) {
-        increment(this.#differencesAfterRle, difference);
-      }
+      increment(
+        this.#mruDifferenceCounts,
+        this.#differenceMruList.encode(difference)
+      );
     }
     this.#previousByte = byte;
   }
@@ -96,11 +92,11 @@ class Accumulator {
   get differenceCounts(): ReadonlyMap<number, number> {
     return this.#differenceCounts;
   }
-  get differencesAfterRle(): ReadonlyMap<number, number> {
-    return this.#differencesAfterRle;
+  get mruByteCounts(): ReadonlyMap<number, number> {
+    return this.#mruByteCounts;
   }
-  get runLengths(): ReadonlyMap<number, number> {
-    return this.#runLengths;
+  get mruDifferenceCounts(): ReadonlyMap<number, number> {
+    return this.#mruDifferenceCounts;
   }
 }
 
@@ -115,9 +111,8 @@ function stats(imageData: ImageData, initialFileSize: number) {
   });
   let positionCompressedSize = 0;
   let differenceCompressedSize = 0;
-  let optimisticRleCompressedSize = 0;
-  let lessOptimisticRleCompressedSize = 0;
-  let rleCompressedSize = 0;
+  let mruPositionCompressedSize = 0;
+  let mruDifferenceCompressedSize = 0;
   for (let [name, accumulator] of zip(channelNames, accumulators)) {
     const top = selectorQuery(`[data-color="${name}"]`, HTMLDivElement);
     function drawHistogram(
@@ -161,48 +156,34 @@ function stats(imageData: ImageData, initialFileSize: number) {
     );
 
     /**
-     * This is an upper bound on how much we can save from the RLE.
      *
-     * RLE only looks at bytes where the difference between that byte and the previous byte is 0.
-     * Assume all of these zero are all together and can be handled in one RLE instruction with fixed cost.
      */
-    const optimisticRleCounts = new Map(accumulator.differenceCounts);
-    optimisticRleCounts.set(0, 0);
-    const optimisticRleCost = EntropyEncoder.costFromMap(optimisticRleCounts);
-    optimisticRleCompressedSize += optimisticRleCost;
-    drawHistogram('[data-content="optimistic-rle"]', optimisticRleCounts);
+    const mruByteCost = EntropyEncoder.costFromMap(accumulator.mruByteCounts);
+    mruPositionCompressedSize += mruByteCost;
+    drawHistogram('[data-content="mru-bytes"]', accumulator.mruByteCounts);
     say(
-      '[data-which="optimistic-rle"',
+      '[data-which="mru-bytes"',
       `Number of 0’s: ${countZeros(
-        optimisticRleCounts
-      )}. Cost in bytes: ${optimisticRleCost.toLocaleString()}.`
+        accumulator.mruByteCounts
+      )}. Cost in bytes: ${mruByteCost.toLocaleString()}`
     );
 
     /**
-     * A modified version of the differences, because we've removed the ones that were part of an RLE stream.
+     * .
      */
-    const rleDifferencesCost = EntropyEncoder.costFromMap(
-      accumulator.differencesAfterRle
+    const mruDifferenceCost = EntropyEncoder.costFromMap(
+      accumulator.mruDifferenceCounts
     );
+    mruDifferenceCompressedSize += mruDifferenceCost;
     drawHistogram(
-      '[data-content="rle-differences"]',
-      accumulator.differencesAfterRle
+      '[data-content="mru-differences"]',
+      accumulator.mruDifferenceCounts
     );
-    /**
-     * And then the cost of those runs.
-     */
-    const rleRunsCost = EntropyEncoder.costFromMap(accumulator.runLengths);
-    if (accumulator.runLengths.size < 2000) {
-      drawHistogram('[data-content="rle-lengths"]', accumulator.runLengths);
-    }
-    console.log(accumulator.runLengths);
-    lessOptimisticRleCompressedSize += rleDifferencesCost;
-    rleCompressedSize += rleDifferencesCost + rleRunsCost;
     say(
-      '[data-which="rle"]',
-      `Differences cost: ${rleDifferencesCost.toLocaleString()}, Runs cost: ${rleRunsCost.toLocaleString()}, Total cost in bytes: ${
-        rleDifferencesCost + rleRunsCost
-      }.`
+      '[data-which="mru-differences"',
+      `Number of 0’s: ${countZeros(
+        accumulator.mruDifferenceCounts
+      )}. Cost in bytes: ${mruDifferenceCost.toLocaleString()}.`
     );
   }
   const uncompressedFileSize = imageData.data.length;
@@ -229,33 +210,29 @@ function stats(imageData: ImageData, initialFileSize: number) {
       (differenceCompressedSize / initialFileSize) *
       100
     ).toFixed(3)}% of PNG.`,
+
     document.createElement("br"),
-    `Optimistic RLE compressed size: ${optimisticRleCompressedSize.toLocaleString()}, ${(
-      (optimisticRleCompressedSize / uncompressedFileSize) *
+    `MRU encoded byte compressed size: ${mruPositionCompressedSize.toLocaleString()}, ${(
+      (mruPositionCompressedSize / uncompressedFileSize) *
       100
     ).toFixed(3)}% of uncompressed, ${(
-      (optimisticRleCompressedSize / initialFileSize) *
+      (mruPositionCompressedSize / initialFileSize) *
       100
     ).toFixed(3)}% of PNG.`,
     document.createElement("br"),
-    `Less optimistic RLE compressed size: ${lessOptimisticRleCompressedSize.toLocaleString()}, ${(
-      (lessOptimisticRleCompressedSize / uncompressedFileSize) *
+    `MRU encoded difference compressed size: ${mruDifferenceCompressedSize.toLocaleString()}, ${(
+      (mruDifferenceCompressedSize / uncompressedFileSize) *
       100
     ).toFixed(3)}% of uncompressed, ${(
-      (lessOptimisticRleCompressedSize / initialFileSize) *
-      100
-    ).toFixed(3)}% of PNG.`,
-    document.createElement("br"),
-    `RLE compressed size: ${rleCompressedSize.toLocaleString()}, ${(
-      (rleCompressedSize / uncompressedFileSize) *
-      100
-    ).toFixed(3)}% of uncompressed, ${(
-      (rleCompressedSize / initialFileSize) *
+      (mruDifferenceCompressedSize / initialFileSize) *
       100
     ).toFixed(3)}% of PNG.`
   );
 }
 
-loadFromUrl("./reference-images/Lenna.png");
+//loadFromUrl("./reference-images/Lenna.png");
+loadFromUrl("./reference-images/Laser Light Show.png");
 
 (window as any).philDebug = { loadFromUrl, EntropyEncoder };
+
+(window as any).MruList = MruList;
