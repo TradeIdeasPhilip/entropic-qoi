@@ -68,27 +68,7 @@ export function makeHistogram(
     .attr("x", (d) => x(String(d.key))!) // Cast key to string for x-scale
     .attr("y", (d) => y(Math.max(d.frequency, 1e-6))) // Ensure small bins are visible
     .attr("height", (d) => y(0) - y(Math.max(d.frequency, 1e-6)))
-    .attr("width", x.bandwidth())
-    .on("mouseover", function (_event, d) {
-      // Remove unused 'event' parameter
-      d3.select(this).attr("fill", "orange"); // Highlight on hover
-      tooltip
-        .style("visibility", "visible")
-        .text(`Value: ${d.key}, Count: ${d.frequency.toLocaleString()}`);
-    })
-    .on("mousemove", function (event) {
-      tooltip
-        .style("top", `${event.pageY - 10}px`)
-        .style("left", `${event.pageX + 10}px`);
-    });
-  /*
-    .on("mouseout", function (this: SVGRectElement) {
-      d3.select(this as SVGRectElement).attr("fill", (d:{ key: number; frequency: number; }) =>
-        d.frequency === 0 ? "transparent" : d.frequency < 1000 ? "#d3d3d3" : "steelblue"
-      );
-      tooltip.style("visibility", "hidden");
-    });
-    */
+    .attr("width", x.bandwidth());
   // Add the x-axis and label, showing every 16th tick.
   svg
     .append("g")

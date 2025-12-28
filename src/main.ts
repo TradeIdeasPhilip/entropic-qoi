@@ -73,7 +73,14 @@ class Accumulator {
   #mruDifferenceCounts = new Map<number, number>(
     initializedArray(511, (index) => [index, 0])
   );
-  add(byte: number) {
+  #doubleDifferenceCounts = new Map<number, number>(
+    count(-255, 256).map((difference) => [difference, 0])
+  );
+  #doubleDifferenceMruList = MruList.diffs();
+  #mruDoubleDifferenceCounts = new Map<number, number>(
+    initializedArray(511, (index) => [index, 0])
+  );
+  add(byte: number, byteAbove: number | undefined) {
     increment(this.#byteCounts, byte);
     increment(this.#mruByteCounts, this.#byteMruList.encode(byte));
     if (this.#previousByte !== undefined) {
@@ -83,6 +90,17 @@ class Accumulator {
         this.#mruDifferenceCounts,
         this.#differenceMruList.encode(difference)
       );
+      {
+        const doubleDifference =
+          byteAbove === undefined
+            ? difference
+            : byte - Math.floor((this.#previousByte + byteAbove) / 2);
+        increment(this.#doubleDifferenceCounts, doubleDifference);
+        increment(
+          this.#mruDoubleDifferenceCounts,
+          this.#doubleDifferenceMruList.encode(doubleDifference)
+        );
+      }
     }
     this.#previousByte = byte;
   }
@@ -92,11 +110,17 @@ class Accumulator {
   get differenceCounts(): ReadonlyMap<number, number> {
     return this.#differenceCounts;
   }
+  get doubleDifferenceCounts(): ReadonlyMap<number, number> {
+    return this.#doubleDifferenceCounts;
+  }
   get mruByteCounts(): ReadonlyMap<number, number> {
     return this.#mruByteCounts;
   }
   get mruDifferenceCounts(): ReadonlyMap<number, number> {
     return this.#mruDifferenceCounts;
+  }
+  get mruDoubleDifferenceCounts(): ReadonlyMap<number, number> {
+    return this.#mruDoubleDifferenceCounts;
   }
 }
 
@@ -105,14 +129,19 @@ const channelNames = ["red", "green", "blue", "alpha"];
 function stats(imageData: ImageData, initialFileSize: number) {
   const channelCount = channelNames.length;
   const accumulators = initializedArray(channelCount, () => new Accumulator());
-  imageData.data.forEach((byte, index) => {
+  const oneRowUp = imageData.width * channelCount;
+  imageData.data.forEach((byte, index, array) => {
     const accumulator = accumulators[index % channelCount];
-    accumulator.add(byte);
+    const indexAbove = index - oneRowUp;
+    const byteAbove = array[indexAbove] as number | undefined;
+    accumulator.add(byte, byteAbove);
   });
   let positionCompressedSize = 0;
   let differenceCompressedSize = 0;
+  let doubleDifferenceCompressedSize = 0;
   let mruPositionCompressedSize = 0;
   let mruDifferenceCompressedSize = 0;
+  let mruDoubleDifferenceCompressedSize = 0;
   for (let [name, accumulator] of zip(channelNames, accumulators)) {
     const top = selectorQuery(`[data-color="${name}"]`, HTMLDivElement);
     function drawHistogram(
@@ -156,6 +185,25 @@ function stats(imageData: ImageData, initialFileSize: number) {
     );
 
     /**
+     * More preprocessing:  If we are not on the top row, take the average of the previous pixel and the pixel above.
+     * Subtract that value from the current value, then encode these differences.
+     */
+    const doubleDifferenceCost = EntropyEncoder.costFromMap(
+      accumulator.doubleDifferenceCounts
+    );
+    doubleDifferenceCompressedSize += doubleDifferenceCost;
+    drawHistogram(
+      '[data-content="double-differences"]',
+      accumulator.doubleDifferenceCounts
+    );
+    say(
+      '[data-which="double-differences"',
+      `Number of 0’s: ${countZeros(
+        accumulator.doubleDifferenceCounts
+      )}. Cost in bytes: ${doubleDifferenceCost.toLocaleString()}.`
+    );
+
+    /**
      *
      */
     const mruByteCost = EntropyEncoder.costFromMap(accumulator.mruByteCounts);
@@ -185,6 +233,26 @@ function stats(imageData: ImageData, initialFileSize: number) {
         accumulator.mruDifferenceCounts
       )}. Cost in bytes: ${mruDifferenceCost.toLocaleString()}.`
     );
+
+    /**
+     * More preprocessing:  If we are not on the top row, take the average of the previous pixel and the pixel above.
+     * Subtract that value from the current value, then encode these differences.
+     * Then apply the MRU list encoding.
+     */
+    const mruDoubleDifferenceCost = EntropyEncoder.costFromMap(
+      accumulator.mruDoubleDifferenceCounts
+    );
+    mruDoubleDifferenceCompressedSize += mruDoubleDifferenceCost;
+    drawHistogram(
+      '[data-content="mru-double-differences"]',
+      accumulator.mruDoubleDifferenceCounts
+    );
+    say(
+      '[data-which="mru-double-differences"',
+      `Number of 0’s: ${countZeros(
+        accumulator.mruDoubleDifferenceCounts
+      )}. Cost in bytes: ${mruDoubleDifferenceCost.toLocaleString()}.`
+    );
   }
   const uncompressedFileSize = imageData.data.length;
   selectorQuery("#summary", HTMLDivElement).append(
@@ -210,7 +278,14 @@ function stats(imageData: ImageData, initialFileSize: number) {
       (differenceCompressedSize / initialFileSize) *
       100
     ).toFixed(3)}% of PNG.`,
-
+    document.createElement("br"),
+    `Double difference compressed size: ${doubleDifferenceCompressedSize.toLocaleString()}, ${(
+      (doubleDifferenceCompressedSize / uncompressedFileSize) *
+      100
+    ).toFixed(3)}% of uncompressed, ${(
+      (doubleDifferenceCompressedSize / initialFileSize) *
+      100
+    ).toFixed(3)}% of PNG.`,
     document.createElement("br"),
     `MRU encoded byte compressed size: ${mruPositionCompressedSize.toLocaleString()}, ${(
       (mruPositionCompressedSize / uncompressedFileSize) *
@@ -226,13 +301,22 @@ function stats(imageData: ImageData, initialFileSize: number) {
     ).toFixed(3)}% of uncompressed, ${(
       (mruDifferenceCompressedSize / initialFileSize) *
       100
+    ).toFixed(3)}% of PNG.`,
+    document.createElement("br"),
+    `MRU encoded double difference compressed size: ${mruDoubleDifferenceCompressedSize.toLocaleString()}, ${(
+      (mruDoubleDifferenceCompressedSize / uncompressedFileSize) *
+      100
+    ).toFixed(3)}% of uncompressed, ${(
+      (mruDoubleDifferenceCompressedSize / initialFileSize) *
+      100
     ).toFixed(3)}% of PNG.`
   );
 }
 
-//loadFromUrl("./reference-images/Lenna.png");
-loadFromUrl("./reference-images/Laser Light Show.png");
+loadFromUrl("./reference-images/Lenna.png");
+//loadFromUrl("./reference-images/Laser Light Show.png");
+//loadFromUrl("./reference-images/Super Bright Lights.png");
+//loadFromUrl("./reference-images/IMGP5493_seamless_2.png");
+//loadFromUrl("https://qoiformat.org/benchmark/images/textures_photo/IMGP5493_seamless_2.png");
 
-(window as any).philDebug = { loadFromUrl, EntropyEncoder };
-
-(window as any).MruList = MruList;
+(window as any).philDebug = { loadFromUrl, EntropyEncoder, MruList };
